@@ -1,20 +1,46 @@
-import express from 'express';
-import {  signOut, signin, signup , updateSubscriptionStatus, checkSubscriptionStatus, updateUserPoints,getUserPoints, updateSurveySubscriptionStatus,checkSurveySubscriptionStatus, changePassword} from '../controllers/auth.controller.mjs';
-import { verifyToken } from '../utils/verifyUser.mjs';
+import express from "express";
+import {
+  registerJobseeker,
+  registerCompany,
+  createLoginSession,
+  getPrivacySettings,
+  updatePrivacySettings,
+  getLoginActivity,
+  signOutAllDevices,
+  createJobSeekerProfile,
+  createJobPost
+} from "../controllers/auth.controller.mjs";
 
 const router = express.Router();
 
-router.post("/signup", signup);
-router.post("/signin", signin);
-router.post('/signout', signOut)
-router.put("/:userId/subscription-status", updateSubscriptionStatus);
-router.get("/:userId/subscription-status", checkSubscriptionStatus);
-router.put("/:userId/surveysubscription-status", updateSurveySubscriptionStatus);
-router.get("/:userId/surveysubscription-status", checkSurveySubscriptionStatus);
-router.put("/:userId/points", updateUserPoints);
-// GET /users/:userId/points - Fetch user points
-router.get("/:userId/points", getUserPoints);
-// Change password endpoint (protected route)
-router.put("/change-password", verifyToken, changePassword);
+// ===========================================
+// AUTH ROUTES
+// ===========================================
+
+// Registration
+router.post("/register/jobseeker", registerJobseeker);
+router.post("/register/company", registerCompany);
+
+// Login
+router.post("/login", createLoginSession);
+
+// ===========================================
+// PROFILE & JOB ROUTES
+// ===========================================
+
+// Job Seeker Profile
+router.post("/job-seeker/profile", createJobSeekerProfile);
+
+// Job Posts
+router.post("/jobs", createJobPost);
+
+// ===========================================
+// PRIVACY & SECURITY ROUTES
+// ===========================================
+
+router.get("/privacy-settings", getPrivacySettings);
+router.put("/privacy-settings", updatePrivacySettings);
+router.get("/login-activity", getLoginActivity);
+router.post("/signout-all", signOutAllDevices);
 
 export default router;

@@ -1,444 +1,790 @@
 import asyncHandler from "express-async-handler";
-import prisma from '../lib/prisma.mjs';
-import bcrypt from 'bcryptjs';
-import { errorHandler } from "../utils/error.mjs";
-import jwt from 'jsonwebtoken';
+import prisma from "../lib/prisma.mjs";
+import bcrypt from "bcryptjs";
 
-// User Signup
-export const signup = asyncHandler(async (req, res, next) => {
-  console.log("👤 Creating a new user");
+// ==========================================
+// REGISTRATION
+// ==========================================
 
-  const {email, password,firstName,lastName,phone } = req.body;
+// Register Jobseeker - FIXED VERSION
+export const registerJobseeker = asyncHandler(async (req, res) => {
+  console.log("🔍 FULL REQUEST BODY:", JSON.stringify(req.body, null, 2));
+  
+  const {
+    firstName,
+    lastName,
+    email,
+    phoneNumber,
+    password,
+    confirmPassword,
+    agreeToTerms
+  } = req.body;
 
-  console.log('📝 Signup request for email:', email);
-
-  // Check if the user already exists
-  const userExists = await prisma.appUser.findUnique({ where: {email } });
-
-  if (userExists) {
-    console.log("❌ User already exists:", email);
-    return res.status(409).send({ message: "User already registered" });
-  }
-
-  console.log('✅ User does not exist, proceeding with registration');
-
-  // Hash the password
-  const hashedPassword = await bcrypt.hash(password, 10);
-  console.log('🔒 Password hashed successfully');
-
-  // Create new user
-  const newUser = await prisma.appUser.create({
-    data: {
-     email,     
-      password: hashedPassword,
-      firstName,
-      lastName,
-      phone,
-    },
+  console.log("🔍 Destructured fields:", {
+    firstName, lastName, email, phoneNumber, password, confirmPassword, agreeToTerms
   });
 
-  console.log('✅ New user created successfully:', { id: newUser.id, email: newUser.email, firstName: newUser.firstName, lastName: newUser.lastName });
+  // ✅ Validation - Check all required fields
+  if (!firstName || !lastName || !email || !phoneNumber || !password || !confirmPassword) {
+    console.log("❌ Missing fields detected:", {
+      firstName: !!firstName, lastName: !!lastName, email: !!email,
+      phoneNumber: !!phoneNumber, password: !!password, confirmPassword: !!confirmPassword
+    });
+    return res.status(400).json({
+      success: false,
+      message: "All fields are required"
+    });
+  }
 
-  // Create JWT token
-  const token = jwt.sign({ id: newUser.id }, process.env.JWT_SECRET, { expiresIn: '3h' });
+  if (!agreeToTerms) {
+    return res.status(400).json({
+      success: false,
+      message: "You must agree to the terms and conditions"
+    });
+  }
 
-  console.log('🎫 JWT token created with 3-hour expiration');
+  if (password !== confirmPassword) {
+    return res.status(400).json({
+      success: false,
+      message: "Passwords do not match"
+    });
+  }
 
-  // Send response with user data and token
-  res.status(200).send({
-    message: "Registered successfully",
-    user: {
-      id: newUser.id,
-    email: newUser.email,
-      // image: newUser.image,
-    },
-    token,
-  });
+  // Phone validation (Ugandan format)
+  const phoneRegex = /^(\+?256|0)[17]\d{8}$/;
+  if (!phoneRegex.test(phoneNumber)) {
+    return res.status(400).json({
+      success: false,
+      message: "Please provide a valid Ugandan phone number"
+    });
+  }
 
-  console.log('🎉 User registration completed successfully for:', email);
-});
-
-
-// Update user points
-export const updateUserPoints = asyncHandler(async (req, res, next) => {
-  const { userId } = req.params;
-  const { points } = req.body;
-
-  console.log(`Updating points for user ${userId} to ${points}`);
-
-  // Validate input
-  if (!userId || typeof userId !== "string" || isNaN(points)) {
-    return next(errorHandler(400, "Invalid user ID or points value"));
+  // Password strength
+  if (password.length < 8 || !/\d/.test(password) || !/[a-zA-Z]/.test(password)) {
+    return res.status(400).json({
+      success: false,
+      message: "Password must be at least 8 characters with letters and numbers"
+    });
   }
 
   try {
-    // Find the user and update their points
-    const updatedUser = await prisma.appUser.update({
-      where: { id: userId }, // Pass userId as a string (no parseInt needed)
-      data: { points: parseInt(points) }, // Ensure points is an integer
-    });
-
-    if (!updatedUser) {
-      return next(errorHandler(404, "User not found"));
-    }
-
-    // Send success response
-    res.status(200).json({
-      success: true,
-      message: "Points updated successfully!",
-      user: {
-        id: updatedUser.id,
-        email: updatedUser.email,
-        points: updatedUser.points,
-      },
-    });
-  } catch (error) {
-    console.error("Failed to update user points:", error);
-    next(errorHandler(500, "Failed to update points"));
-  }
-});
-// signin code
-
-// Fetch user points
-// Change password endpoint
-export const changePassword = asyncHandler(async (req, res, next) => {
-  const { currentPassword, newPassword } = req.body;
-  const userId = req.user.id; // From JWT token
-
-  console.log('🔐 Password change request received for user ID:', userId);
-  console.log('📝 Request body:', { currentPassword: '***', newPassword: '***' });
-
-  try {
-    // Find the user
-    const user = await prisma.appUser.findUnique({
-      where: { id: userId },
-      select: { password: true, email: true, firstName: true, lastName: true }
-    });
-
-    if (!user) {
-      console.log('❌ User not found for ID:', userId);
-      return next(errorHandler(404, "User not found"));
-    }
-
-    console.log('✅ User found:', { email: user.email, firstName: user.firstName, lastName: user.lastName });
-
-    // Verify current password
-    const isCurrentPasswordValid = await bcrypt.compare(currentPassword, user.password);
-    if (!isCurrentPasswordValid) {
-      console.log('❌ Current password verification failed for user:', user.email);
-      return next(errorHandler(400, "Current password is incorrect"));
-    }
-
-    console.log('✅ Current password verified successfully for user:', user.email);
-
-    // Hash the new password
-    const hashedNewPassword = await bcrypt.hash(newPassword, 10);
-    console.log('🔒 New password hashed successfully');
-
-    // Update the password
-    await prisma.appUser.update({
-      where: { id: userId },
-      data: { password: hashedNewPassword }
-    });
-
-    console.log('✅ Password updated successfully in database for user:', user.email);
-
-    res.status(200).json({
-      success: true,
-      message: "Password changed successfully"
-    });
-
-    console.log('🎉 Password change completed successfully for user:', user.email);
-  } catch (error) {
-    console.error("❌ Failed to change password:", error);
-    next(errorHandler(500, "Failed to change password"));
-  }
-});
-
-export const getUserPoints = async (req, res, next) => {
-  const { userId } = req.params;
-
-  try {
-    // Find the user and select only the points field
-    const user = await prisma.appUser.findUnique({
-      where: { id: String(userId) }, // Ensure it's a string
-      select: { points: true },
-    });
+    console.log("🔍 Checking for existing user...");
     
-    if (!user) {
-      return next(errorHandler(404, "User not found"));
+    // SIMPLIFIED: Check only by email first
+    const existingUser = await prisma.user.findUnique({
+      where: {
+        email: email.toLowerCase()
+      }
+    });
+
+    if (existingUser) {
+      return res.status(400).json({
+        success: false,
+        message: "User with this email already exists"
+      });
     }
 
-    // Return the user's points
-    res.status(200).json(user);
-  } catch (error) {
-    console.error("Failed to fetch user points:", error);
-    next(errorHandler(500, "Failed to fetch user points"));
-  }
-};
+    // Check if phone already exists
+    const existingPhone = await prisma.user.findFirst({
+      where: {
+        phone: phoneNumber
+      }
+    });
 
+    if (existingPhone) {
+      return res.status(400).json({
+        success: false,
+        message: "User with this phone number already exists"
+      });
+    }
 
-export const signin = asyncHandler(async (req, res, next) => {
-  const {email, password } = req.body;
-  console.log('Incoming request:', req.body);
+    // Hash password
+    console.log("🔐 Hashing password...");
+    const hashedPassword = await bcrypt.hash(password, 12);
 
-  const validUser = await prisma.appUser.findUnique({ where: {email } });
-
-  if (!validUser) {
-    console.error('user not found');
-    return next(errorHandler(404, 'User not found!'));
-  }
-
-  console.log('User found:', validUser);
-
-  if (typeof validUser.password !== 'string') {
-    return next(errorHandler(500, 'Invalid password format!'));
-  }
-
-  const validPassword = await bcrypt.compare(password, validUser.password);
-  if (!validPassword) {
-    return next(errorHandler(401, 'Wrong credentials!'));
-  }
-
-  const token = jwt.sign({ id: validUser.id }, process.env.JWT_SECRET, { expiresIn: '3h' });
-  const { password: pass, ...rest } = validUser;
-  console.log('✅ Successful login for user:', validUser.email);
-  console.log('🕐 Token expiration set to 3 hours');
-  
-  // Log the user data to ensure the image is included
-  console.log('📤 User data to be returned:', rest);
-
-  // Create login session
-  try {
-    const deviceInfo = {
-      platform: req.headers['user-agent']?.includes('Mobile') ? 'Mobile' : 'Desktop',
-      browser: req.headers['user-agent']?.includes('Chrome') ? 'Chrome' : 
-               req.headers['user-agent']?.includes('Safari') ? 'Safari' : 
-               req.headers['user-agent']?.includes('Firefox') ? 'Firefox' : 'Unknown',
-      os: req.headers['user-agent']?.includes('Android') ? 'Android' : 
-          req.headers['user-agent']?.includes('iOS') ? 'iOS' : 
-          req.headers['user-agent']?.includes('Windows') ? 'Windows' : 
-          req.headers['user-agent']?.includes('Mac') ? 'macOS' : 'Unknown'
-    };
-
-    console.log('📱 Creating login session with device info:', deviceInfo);
-
-    const loginSession = await prisma.loginSession.create({
+    // CREATE USER WITHOUT TRANSACTION (simpler approach)
+    console.log("👤 Creating user...");
+    const newUser = await prisma.user.create({
       data: {
-        userId: validUser.id,
-        deviceInfo,
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        email: email.toLowerCase().trim(),
+        phone: phoneNumber.trim(),
+        password: hashedPassword,
+        userType: "JOB_SEEKER", // Explicit enum value
+        points: 0,
+        subscriptionStatus: "INACTIVE",
+        surveysubscriptionStatus: "INACTIVE",
+        verificationStatus: "PENDING"
+      }
+    });
+
+    console.log("✅ User created:", newUser.id);
+
+    // Create job seeker profile
+    await prisma.jobSeekerProfile.create({
+      data: {
+        userId: newUser.id,
+        profileType: "EMPLOYABLE"
+      }
+    });
+
+    console.log("✅ Profile created for user:", newUser.id);
+
+    res.status(201).json({
+      success: true,
+      message: "Account created successfully. Please login.",
+      redirectTo: "/login",
+      userId: newUser.id
+    });
+
+  } catch (error) {
+    console.error("❌ Registration error:", error);
+    console.error("❌ Error details:", error.message);
+    
+    // More detailed error information
+    if (error.code) {
+      console.error("❌ Prisma error code:", error.code);
+    }
+    
+    res.status(500).json({
+      success: false,
+      message: "Registration failed. Please try again.",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// Register Company - FIXED VERSION
+export const registerCompany = asyncHandler(async (req, res) => {
+  console.log("🔍 COMPANY REGISTRATION BODY:", JSON.stringify(req.body, null, 2));
+  
+  const {
+    companyName,
+    email,
+    password,
+    confirmPassword,
+    industry,
+    phone,
+    address,
+    companySize,
+    establishmentYear,
+    description,
+    contactPersonName,
+    contactPersonPosition,
+    website,
+    linkedin,
+    agreeToTerms
+  } = req.body;
+
+  // ✅ Validation
+  const requiredFields = [
+    'companyName', 'email', 'password', 'confirmPassword', 'industry',
+    'phone', 'address', 'companySize', 'establishmentYear', 'description',
+    'contactPersonName', 'contactPersonPosition', 'agreeToTerms'
+  ];
+
+  for (const field of requiredFields) {
+    if (!req.body[field]) {
+      console.log(`❌ Missing field: ${field}`);
+      return res.status(400).json({
+        success: false,
+        message: `${field.replace(/([A-Z])/g, ' $1').toLowerCase()} is required`
+      });
+    }
+  }
+
+  if (password !== confirmPassword) {
+    return res.status(400).json({
+      success: false,
+      message: "Passwords do not match"
+    });
+  }
+
+  if (password.length < 8 || !/\d/.test(password) || !/[a-zA-Z]/.test(password)) {
+    return res.status(400).json({
+      success: false,
+      message: "Password must be at least 8 characters with letters and numbers"
+    });
+  }
+
+  // Phone validation
+  const phoneRegex = /^(\+?256|0)[17]\d{8}$/;
+  if (!phoneRegex.test(phone)) {
+    return res.status(400).json({
+      success: false,
+      message: "Please provide a valid Ugandan phone number"
+    });
+  }
+
+  try {
+    // Check existing company
+    const existingCompany = await prisma.user.findUnique({
+      where: { email: email.toLowerCase() }
+    });
+
+    if (existingCompany) {
+      return res.status(400).json({
+        success: false,
+        message: "Company with this email already exists"
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 12);
+
+    // CREATE COMPANY WITHOUT TRANSACTION
+    const newCompany = await prisma.user.create({
+      data: {
+        companyName: companyName.trim(),
+        email: email.toLowerCase().trim(),
+        phone: phone.trim(),
+        password: hashedPassword,
+        userType: "COMPANY", // Explicit enum value
+        industry,
+        companySize,
+        establishmentYear: parseInt(establishmentYear),
+        description: description.trim(),
+        address: address.trim(),
+        website,
+        linkedin,
+        contactPersonName: contactPersonName.trim(),
+        contactPersonPosition: contactPersonPosition.trim(),
+        points: 0,
+        subscriptionStatus: "INACTIVE",
+        surveysubscriptionStatus: "INACTIVE",
+        verificationStatus: "PENDING"
+      }
+    });
+
+    // Create company profile
+    await prisma.companyProfile.create({
+      data: {
+        userId: newCompany.id,
+        companyName: companyName.trim(),
+        industry,
+        companySize,
+        establishmentYear: parseInt(establishmentYear),
+        description: description.trim(),
+        phone: phone.trim(),
+        email: email.toLowerCase().trim(),
+        address: address.trim(),
+        website,
+        linkedin,
+        contactPersonName: contactPersonName.trim(),
+        contactPersonPosition: contactPersonPosition.trim()
+      }
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "Company account created successfully. Please login.",
+      redirectTo: "/login",
+      companyId: newCompany.id
+    });
+
+  } catch (error) {
+    console.error("Company registration error:", error);
+    console.error("Company error details:", error.message);
+    res.status(500).json({
+      success: false,
+      message: "Company registration failed",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// ==========================================
+// LOGIN & SESSIONS (JOB_UC_02.0)
+// ==========================================
+
+// Login User
+export const createLoginSession = asyncHandler(async (req, res) => {
+  const { email, password } = req.body;
+
+  if (!email || !password) {
+    return res.status(400).json({
+      success: false,
+      message: "Email and password are required"
+    });
+  }
+
+  try {
+    const user = await prisma.user.findUnique({
+      where: { email: email.toLowerCase() },
+      select: {
+        id: true,
+        email: true,
+        password: true,
+        firstName: true,
+        lastName: true,
+        userType: true,
+        phone: true,
+        points: true,
+        companyName: true,
+        subscriptionStatus: true,
+        verificationStatus: true
+      }
+    });
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid email or password"
+      });
+    }
+
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid email or password"
+      });
+    }
+
+    // Create login session
+    await prisma.loginSession.create({
+      data: {
+        userId: user.id,
         ipAddress: req.ip || req.connection.remoteAddress,
-        userAgent: req.headers['user-agent'],
-        sessionToken: token,
-      },
+        userAgent: req.headers['user-agent'] || 'Unknown'
+      }
     });
 
-    console.log('✅ Login session created successfully:', { sessionId: loginSession.id, userId: loginSession.userId });
-  } catch (error) {
-    console.error('❌ Failed to create login session:', error);
-    // Don't fail the login if session creation fails
-  }
+    // Set user session
+    req.session.userId = user.id;
+    req.session.userType = user.userType;
+    req.session.email = user.email;
 
-  res.status(200).json({
-    success: true,
-    token,
-    user: rest,
-  });
+    // Remove password from response
+    const { password: _, ...userWithoutPassword } = user;
+
+    // Determine redirect path
+    let redirectTo = "/dashboard";
+    if (user.userType === "JOB_SEEKER") {
+      redirectTo = "/jobseeker/dashboard";
+    } else if (user.userType === "COMPANY") {
+      redirectTo = "/company/dashboard";
+    }
+
+    res.json({
+      success: true,
+      message: "Login successful",
+      user: userWithoutPassword,
+      redirectTo
+    });
+
+  } catch (error) {
+    console.error("Login error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Login failed",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
 });
 
+// ==========================================
+// PRIVACY & SECURITY
+// ==========================================
 
+// Get Privacy Settings
+export const getPrivacySettings = asyncHandler(async (req, res) => {
+  const userId = req.session.userId;
 
-// User SignOut
-export const signOut = asyncHandler(async (req, res, next) => {
-  const userId = req.user?.id;
-  console.log('🚪 User signout request for user ID:', userId);
-  
-  // Mark current session as inactive
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      message: "Not authenticated"
+    });
+  }
+
   try {
-    await prisma.loginSession.updateMany({
-      where: { 
-        userId: userId,
-        sessionToken: req.headers.authorization?.replace('Bearer ', '')
-      },
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        phone: true,
+        privacySettings: true,
+        userType: true
+      }
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      privacySettings: user
+    });
+
+  } catch (error) {
+    console.error("Privacy settings error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch privacy settings",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// Update Privacy Settings
+export const updatePrivacySettings = asyncHandler(async (req, res) => {
+  const userId = req.session.userId;
+
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      message: "Not authenticated"
+    });
+  }
+
+  const { firstName, lastName, phone, privacySettings } = req.body;
+
+  try {
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
       data: {
-        isActive: false,
-        logoutTime: new Date(),
+        ...(firstName && { firstName }),
+        ...(lastName && { lastName }),
+        ...(phone && { phone }),
+        ...(privacySettings && { privacySettings })
       },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        phone: true,
+        privacySettings: true
+      }
     });
-    console.log('✅ User session marked as inactive for user ID:', userId);
+
+    res.status(200).json({
+      success: true,
+      message: "Privacy settings updated successfully",
+      privacySettings: updatedUser
+    });
+
   } catch (error) {
-    console.error('❌ Failed to update login session on logout:', error);
+    console.error("Update privacy error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update privacy settings",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
-  
-  res.status(200).json('User has been logged out!');
-  console.log('🎉 User logged out successfully for user ID:', userId);
 });
 
+// ==========================================
+// LOGIN ACTIVITY & SESSIONS
+// ==========================================
 
+// Get Login Activity
+export const getLoginActivity = asyncHandler(async (req, res) => {
+  const userId = req.session.userId;
 
-export const updateSubscriptionStatus = async (req, res) => {
-  const { userId } = req.params;
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      message: "Not authenticated"
+    });
+  }
 
   try {
-    // Fetch the user's latest payment
-    const latestPayment = await prisma.payment.findFirst({
+    const activities = await prisma.loginSession.findMany({
       where: { userId },
-      orderBy: { createdAt: 'desc' }, // Get the most recent payment
+      orderBy: { loginTime: 'desc' },
+      take: 10
     });
 
-    if (!latestPayment) {
-      return res.status(404).json({ error: "No payment found for this user." });
-    }
+    // Mark current session (simplified logic)
+    const activitiesWithCurrent = activities.map(activity => ({
+      id: activity.id,
+      loginTime: activity.loginTime,
+      ipAddress: activity.ipAddress,
+      userAgent: activity.userAgent,
+      isActive: activity.isActive,
+      current: activity.isActive
+    }));
 
-    const currentDate = new Date();
-    const startDate = new Date(latestPayment.startDate);
-    const endDate = new Date(latestPayment.endDate);
-
-    let subscriptionStatus;
-
-    // Check if the current date is within the subscription period
-    if (currentDate >= startDate && currentDate <= endDate) {
-      subscriptionStatus = 'ACTIVE';
-    } else {
-      subscriptionStatus = 'INACTIVE';
-    }
-
-    // Update the user's subscription status
-    const updatedUser = await prisma.appUser.update({
-      where: { id: userId },
-      data: { subscriptionStatus },
+    res.status(200).json({
+      success: true,
+      activities: activitiesWithCurrent
     });
 
-    res.json({
-      message: `Subscription updated to ${subscriptionStatus}!`,
-      user: updatedUser,
-    });
   } catch (error) {
-    console.error("Error updating subscription:", error);
-    res.status(500).json({ error: "Failed to update subscription status." });
-  }
-};
-
-// Check Subscription Status
-// Check Subscription Status
-export const checkSubscriptionStatus = asyncHandler(async (req, res) => {
-  const { userId } = req.params;
-
-  try {
-    // Fetch the user's subscription status from the AppUser model
-    const user = await prisma.appUser.findUnique({
-      where: { id: userId },
-      select: { subscriptionStatus: true },
+    console.error("Login activity error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch login activity",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
-
-    if (!user) {
-      return res.status(404).json({ error: "User not found." });
-    }
-
-    // Return the subscription status
-    res.json({
-      subscriptionStatus: user.subscriptionStatus,
-    });
-  } catch (error) {
-    console.error("Error checking subscription status:", error);
-    res.status(500).json({ error: "Failed to check subscription status." });
   }
 });
 
+// Sign Out All Devices
+export const signOutAllDevices = asyncHandler(async (req, res) => {
+  const userId = req.session.userId;
 
-export const updateSurveySubscriptionStatus = async (req, res) => {
-  const { userId } = req.params;
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      message: "Not authenticated"
+    });
+  }
 
   try {
-    // Fetch the user's latest payment
-    const latestPayment = await prisma.payment.findFirst({
+    // Deactivate all login sessions for this user
+    await prisma.loginSession.updateMany({
+      where: { userId, isActive: true },
+      data: { isActive: false }
+    });
+
+    // Destroy current session
+    req.session.destroy((err) => {
+      if (err) {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to sign out"
+        });
+      }
+
+      res.status(200).json({
+        success: true,
+        message: "Signed out from all devices successfully"
+      });
+    });
+
+  } catch (error) {
+    console.error("Sign out error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to sign out from all devices",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// ==========================================
+// PROFILE MANAGEMENT (JOB_UC_05.0)
+// ==========================================
+
+// Create/Update Job Seeker Profile
+export const createJobSeekerProfile = asyncHandler(async (req, res) => {
+  const userId = req.session.userId;
+  const {
+    profileType,
+    bio,
+    skills,
+    education,
+    experience,
+    certifications,
+    portfolio,
+    visibility
+  } = req.body;
+
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      message: "Not authenticated"
+    });
+  }
+
+  // Verify user is a job seeker
+  const user = await prisma.user.findUnique({
+    where: { id: userId, userType: "JOB_SEEKER" }
+  });
+
+  if (!user) {
+    return res.status(403).json({
+      success: false,
+      message: "Only job seekers can create profiles"
+    });
+  }
+
+  // Validation
+  if (!profileType) {
+    return res.status(400).json({
+      success: false,
+      message: "Profile type is required"
+    });
+  }
+
+  if (!bio) {
+    return res.status(400).json({
+      success: false,
+      message: "Bio is required"
+    });
+  }
+
+  if (!education) {
+    return res.status(400).json({
+      success: false,
+      message: "Education information is required"
+    });
+  }
+
+  if (!skills || skills.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: "At least one skill is required"
+    });
+  }
+
+  try {
+    const profile = await prisma.jobSeekerProfile.upsert({
       where: { userId },
-      orderBy: { createdAt: 'desc' }, // Get the most recent payment
-    });
-
-    if (!latestPayment) {
-      return res.status(404).json({ error: "No payment found for this user." });
-    }
-
-    const currentDate = new Date();
-    const startDate = new Date(latestPayment.startDate);
-    const endDate = new Date(latestPayment.endDate);
-
-    let surveysubscriptionStatus;
-
-    // Check if the current date is within the subscription period
-    if (currentDate >= startDate && currentDate <= endDate) {
-      surveysubscriptionStatus = 'ACTIVE';
-    } else {
-      surveysubscriptionStatus = 'INACTIVE';
-    }
-
-    // Update the user's subscription status
-    const updatedUser = await prisma.appUser.update({
-      where: { id: userId },
-      data: { surveysubscriptionStatus },
+      update: {
+        profileType,
+        bio,
+        skills: Array.isArray(skills) ? skills : [skills],
+        education,
+        experience,
+        certifications,
+        portfolio,
+        visibility: visibility || "PRIVATE"
+      },
+      create: {
+        userId,
+        profileType,
+        bio,
+        skills: Array.isArray(skills) ? skills : [skills],
+        education,
+        experience,
+        certifications,
+        portfolio,
+        visibility: visibility || "PRIVATE"
+      }
     });
 
     res.json({
-      message: `Subscription updated to ${surveysubscriptionStatus}!`,
-      user: updatedUser,
+      success: true,
+      message: "Profile saved successfully",
+      profile
     });
+
   } catch (error) {
-    console.error("Error updating subscription:", error);
-    res.status(500).json({ error: "Failed to update survey subscription status." });
+    console.error("Profile error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Profile update failed",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
+});
+
+// ==========================================
+// JOB POSTING (JOB_UC_11.0)
+// ==========================================
+
+// Create Job Post
+export const createJobPost = asyncHandler(async (req, res) => {
+  const userId = req.session.userId;
+  const {
+    title,
+    description,
+    industry,
+    jobType,
+    location,
+    salaryRange,
+    requirements,
+    skillsRequired,
+    applicationDeadline,
+    hasChatArea,
+    experienceLevel,
+    salaryMin,
+    salaryMax,
+    benefits,
+    isRemote
+  } = req.body;
+
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      message: "Not authenticated"
+    });
+  }
+
+  // Verify user is a company
+  const user = await prisma.user.findUnique({
+    where: { id: userId, userType: "COMPANY" }
+  });
+
+  if (!user) {
+    return res.status(403).json({
+      success: false,
+      message: "Only companies can post jobs"
+    });
+  }
+
+  // Validation
+  if (!title || !description || !industry || !jobType || !applicationDeadline) {
+    return res.status(400).json({
+      success: false,
+      message: "Title, description, industry, job type, and deadline are required"
+    });
+  }
+
+  if (new Date(applicationDeadline) <= new Date()) {
+    return res.status(400).json({
+      success: false,
+      message: "Application deadline must be in the future"
+    });
+  }
+
+  try {
+    const jobPost = await prisma.jobPost.create({
+      data: {
+        title,
+        description,
+        companyId: userId,
+        industry,
+        jobType,
+        location,
+        salaryRange,
+        requirements: Array.isArray(requirements) ? requirements : [requirements],
+        skillsRequired: Array.isArray(skillsRequired) ? skillsRequired : [skillsRequired],
+        applicationDeadline: new Date(applicationDeadline),
+        hasChatArea: hasChatArea || false,
+        experienceLevel,
+        salaryMin: salaryMin ? parseInt(salaryMin) : null,
+        salaryMax: salaryMax ? parseInt(salaryMax) : null,
+        benefits: Array.isArray(benefits) ? benefits : [benefits],
+        isRemote: isRemote || false
+      }
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "Job post created successfully",
+      jobPost
+    });
+
+  } catch (error) {
+    console.error("Job post error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Job post creation failed",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+export default {
+  registerJobseeker,
+  registerCompany,
+  createLoginSession,
+  createJobSeekerProfile,
+  createJobPost,
+  getPrivacySettings,
+  updatePrivacySettings,
+  getLoginActivity,
+  signOutAllDevices
 };
-
-// Check Subscription Status
-// Check Subscription Status
-export const checkSurveySubscriptionStatus = asyncHandler(async (req, res) => {
-  const { userId } = req.params;
-
-  try {
-    // Fetch the user's subscription status from the AppUser model
-    const user = await prisma.appUser.findUnique({
-      where: { id: userId },
-      select: { surveysubscriptionStatus: true },
-    });
-
-    if (!user) {
-      return res.status(404).json({ error: "User not found." });
-    }
-
-    // Return the subscription status
-    res.json({
-      surveysubscriptionStatus: user.surveysubscriptionStatus,
-    });
-  } catch (error) {
-    console.error("Error checking survey subscription status:", error);
-    res.status(500).json({ error: "Failed to check  survey subscription status." });
-  }
-});
-
-// Get Rewards for User by User ID
-export const getRewardsByUserId = asyncHandler(async (req, res) => {
-  const { userId } = req.params;
-
-  try {
-    // First, get the user to find their phone number
-    const user = await prisma.appUser.findUnique({
-      where: { id: userId },
-      select: { phone: true },
-    });
-
-    if (!user) {
-      return res.status(404).json({ error: "User not found." });
-    }
-
-    // Then get rewards for that phone number
-    const rewards = await prisma.reward.findMany({
-      where: { userPhoneNumber: user.phone },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    res.json(rewards);
-  } catch (error) {
-    console.error("Error fetching rewards for user:", error);
-    res.status(500).json({ error: "Failed to fetch rewards." });
-  }
-});

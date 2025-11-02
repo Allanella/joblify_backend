@@ -1,150 +1,112 @@
+import { checkDatabaseHealth } from './config/db.mjs';
 import express from 'express';
 import dotenv from 'dotenv';
 dotenv.config();
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
-import path from 'path';
 import bodyParser from 'body-parser';
-import connectDB from './config/db.mjs';
-
-
-import authRouter from './routes/auth.route.mjs';
-import paymentRoutes from './routes/paymentRoutes.mjs';
-import rewardRoutes from './routes/rewardRoutes.mjs';
-import questionAttemptRoutes from './routes/questionAttemptRoutes.mjs';
-import questionRoutes from './routes/questionRoutes.mjs';
-import surveyRoutes from './routes/surveyRoutes.mjs';
-import videoRoutes from './routes/videoRoutes.mjs';
-import AdRoutes from './routes/AdRoutes.mjs';
-import exploreRoutes from './routes/exploreRoutes.mjs';
-import rewardQuestionRoutes from './routes/rewardQuestionRoutes.mjs';
-import notificationRoutes from './routes/notificationRoutes.mjs';
-import userRoutes from './routes/userRoutes.mjs';
-
-console.log('Starting DelipuCash server...');
-console.log('Environment variables loaded:', {
-  PORT: process.env.PORT,
-  NODE_ENV: process.env.NODE_ENV,
-  DATABASE_URL: process.env.DATABASE_URL ? 'Present' : 'Missing'
-});
+import session from 'express-session';
+import prisma from './lib/prisma.mjs';
 
 const app = express();
+const PORT = process.env.PORT || 3000;
 
-// Database connection (Vercel will handle serverless functions, so connection might be per request)
-if (process.env.VERCEL !== '1') {
-  console.log('Attempting to connect to database...');
- connectDB(); // Only connect directly if not on Vercel
-}
-
-// Middleware
-console.log('Setting up middleware...');
-app.use(express.json());
-app.use(cookieParser());
-app.use(bodyParser.urlencoded({ extended: true }));
-
-// Configure CORS for production and development
-const allowedOrigins = [
-  'http://localhost:3000',
-  'https://delipucashserver.vercel.app',
-  'http://localhost:8081',
-  'exp://192.168.0.117:8081',
-  process.env.FRONTEND_URL // Add your production frontend URL
-].filter(Boolean);
+// ==========================================
+// MIDDLEWARE
+// ==========================================
 
 app.use(cors({
-  origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps, Postman, etc.)
-    if (!origin) return callback(null, true);
-    
-    if (allowedOrigins.indexOf(origin) === -1) {
-      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-      return callback(new Error(msg), false);
-    }
-    return callback(null, true);
-  },
-  credentials: true,
+  origin: process.env.CLIENT_URL || "http://localhost:3000",
+  credentials: true
 }));
 
-// Request logging middleware (only in development)
-if (process.env.NODE_ENV !== 'production') {
-  app.use((req, res, next) => {
-    console.log(`Incoming request: ${req.method} ${req.url}`);
-    if (req.headers.authorization) {
-      console.log('Token present (truncated):', req.headers.authorization.substring(0, 20) + '...');
-    }
-    next();
-  });
-}
+app.use(bodyParser.json({ limit: '10mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
+app.use(cookieParser());
 
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-app.use('/api/rewards', rewardRoutes);
-app.use('/api/attempts', questionAttemptRoutes);
-app.use('/api/questions', questionRoutes);
-app.use('/api/surveys', surveyRoutes);
-app.use('/api/payments', paymentRoutes);
-app.use('/api/videos', videoRoutes);
+// Session configuration
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'joblify-secret-key',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 24 * 60 * 60 * 1000 // 24 hours
+  }
+}));
+
+// ==========================================
+// ROUTES
+// ==========================================
+
+// Import routes
+import authRouter from './routes/auth.route.mjs';
+import jobseekerRouter from './routes/jobseeker.route.mjs';
+import companyRouter from './routes/company.route.mjs';
+
+// Use routes
 app.use('/api/auth', authRouter);
-app.use('/api/ads', AdRoutes);
-app.use('/api/explore', exploreRoutes);
-app.use('/api/reward-questions', rewardQuestionRoutes);
-app.use('/api/notifications', notificationRoutes);
-app.use('/api/users', userRoutes);
+app.use('/api/jobseeker', jobseekerRouter);
+app.use('/api/company', companyRouter);
 
-console.log('Setting up routes...');
+// ==========================================
+// HEALTH CHECK & BASIC ROUTES
+// ==========================================
 
-// Health check endpoint for Vercel
 app.get('/api/health', (req, res) => {
-  res.status(200).json({ 
-    status: 'OK', 
+  res.json({
+    status: 'OK',
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development'
+    environment: process.env.NODE_ENV || 'development',
+    service: 'Joblify API'
   });
 });
 
-// Test endpoint to verify server is working
-app.get('/', (req, res) => {
-  res.json({ 
-    message: 'joblify Server is running!', 
-    timestamp: new Date().toISOString() 
-  });
+// Database health check
+app.get('/api/db-health', async (req, res) => {
+  try {
+    const dbHealth = await checkDatabaseHealth();
+    res.json(dbHealth);
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Database health check failed',
+      error: error.message
+    });
+  }
 });
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-  const statusCode = err.statusCode || 500;
-  const message = err.message || 'Internal Server Error';
-  
-  console.error('Error:', err);
-  
-  return res.status(statusCode).json({
-    success: false,
-    statusCode,
-    message,
-    ...(process.env.NODE_ENV !== 'production' && { stack: err.stack })
-  });
-});
+// ==========================================
+// ERROR HANDLING MIDDLEWARE
+// ==========================================
 
-// 404 handler for API routes
-app.use('/api/*', (req, res) => {
+// 404 handler
+app.use('*', (req, res) => {
   res.status(404).json({
     success: false,
-    message: 'API endpoint not found'
+    message: `Route ${req.originalUrl} not found`
   });
 });
 
-console.log('Setting up server startup...');
-
-// Start the server (only if not in Vercel)
-const PORT = process.env.PORT || 3000;
-if (process.env.VERCEL !== '1') {
-  app.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
-    console.log(`🏠 Home page: http://localhost:${PORT}/`);
-    console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`💾 Database connected: ${process.env.DATABASE_URL ? 'Yes' : 'No'}`);
+// Global error handler
+app.use((error, req, res, next) => {
+  console.error('Global error handler:', error);
+  res.status(500).json({
+    success: false,
+    message: 'Internal server error',
+    error: process.env.NODE_ENV === 'development' ? error.message : undefined
   });
-}
+});
 
-// Export the app for Vercel serverless functions
-export default app;
+// ==========================================
+// SERVER STARTUP
+// ==========================================
+
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📍 Health check: http://localhost:${PORT}/api/health`);
+  console.log(`🔗 Environment: ${process.env.NODE_ENV || 'development'}`);
+});
